@@ -21,6 +21,124 @@ import {
   CheckCircle,
   AlertCircle
 } from 'lucide-react';
+
+
+// Add this after the imports, before CoachDashboard component
+// Custom validation hook
+const useFormValidation = (initialState, validationRules) => {
+  const [values, setValues] = useState(initialState);
+  const [errors, setErrors] = useState({});
+  const [touched, setTouched] = useState({});
+  const [isValid, setIsValid] = useState(false);
+
+  // Validation functions
+  const validateField = (name, value, allValues = values) => {
+    const rules = validationRules[name];
+    if (!rules) return '';
+
+    for (const rule of rules) {
+      const error = rule(value, allValues);
+      if (error) return error;
+    }
+    return '';
+  };
+
+  // Validate all fields
+  const validateForm = (valuesToValidate = values) => {
+    const newErrors = {};
+    let formIsValid = true;
+
+    Object.keys(validationRules).forEach(field => {
+      const error = validateField(field, valuesToValidate[field], valuesToValidate);
+      if (error) {
+        newErrors[field] = error;
+        formIsValid = false;
+      }
+    });
+
+    setErrors(newErrors);
+    setIsValid(formIsValid);
+    return formIsValid;
+  };
+
+  // Handle field change
+  const handleChange = (name, value) => {
+    const newValues = { ...values, [name]: value };
+    setValues(newValues);
+
+    // Real-time validation for touched fields
+    if (touched[name]) {
+      const error = validateField(name, value, newValues);
+      setErrors(prev => ({ ...prev, [name]: error }));
+    }
+
+    // Check overall form validity
+    setTimeout(() => validateForm(newValues), 0);
+  };
+
+  // Handle field blur
+  const handleBlur = (name) => {
+    setTouched(prev => ({ ...prev, [name]: true }));
+    const error = validateField(name, values[name]);
+    setErrors(prev => ({ ...prev, [name]: error }));
+  };
+
+  return {
+    values,
+    errors,
+    touched,
+    isValid,
+    handleChange,
+    handleBlur,
+    validateForm,
+    setValues
+  };
+};
+
+// Validation rules
+const seminarValidationRules = {
+  title: [
+    (value) => !value ? 'Title is required' : '',
+    (value) => value && value.length < 5 ? 'Title must be at least 5 characters' : '',
+    (value) => value && value.length > 100 ? 'Title must be less than 100 characters' : ''
+  ],
+  description: [
+    (value) => !value ? 'Description is required' : '',
+    (value) => value && value.length < 20 ? 'Description must be at least 20 characters' : ''
+  ],
+  category: [
+    (value) => !value ? 'Category is required' : ''
+  ],
+  date: [
+    (value) => !value ? 'Date is required' : '',
+    (value) => {
+      if (!value) return '';
+      const selectedDate = new Date(value);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return selectedDate < today ? 'Date cannot be in the past' : '';
+    }
+  ],
+  time: [
+    (value) => !value ? 'Time is required' : ''
+  ],
+  duration_minutes: [
+    (value) => !value ? 'Duration is required' : '',
+    (value) => value && (isNaN(value) || parseInt(value) < 30) ? 'Duration must be at least 30 minutes' : ''
+  ],
+  venue: [
+    (value) => !value ? 'Venue is required' : ''
+  ],
+  price: [
+    (value) => !value ? 'Price is required' : '',
+    (value) => value && (isNaN(value) || parseFloat(value) < 0) ? 'Price must be positive' : ''
+  ],
+  max_seats: [
+    (value) => !value ? 'Maximum seats is required' : '',
+    (value) => value && (isNaN(value) || parseInt(value) < 1) ? 'Must have at least 1 seat' : ''
+  ]
+};
+
 import api from '../../services/api';
 
 const CoachDashboard = () => {
@@ -32,6 +150,9 @@ const CoachDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [showCreateSeminar, setShowCreateSeminar] = useState(false);
 
+  const [imagePreview, setImagePreview] = useState(null);
+const [imageError, setImageError] = useState('');
+const [uploadProgress, setUploadProgress] = useState(0);
   // Fetch coach stats
   const fetchStats = async () => {
     try {
@@ -750,44 +871,128 @@ const CoachSettings = ({ user }) => {
 };
 
 // Create Seminar Modal Component
+// Replace the existing CreateSeminarModal component in src/pages/coach/Dashboard.js with this enhanced version
+// COMPLETE CreateSeminarModal Component with Full Validation
 const CreateSeminarModal = ({ onClose, onSuccess }) => {
-  const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    category: '',
-    date: '',
-    time: '',
-    duration_minutes: '',
-    venue: '',
-    price: '',
-    early_bird_price: '',
-    early_bird_deadline: '',
-    max_seats: '',
-    requirements_text: '',
-    what_you_learn: ''
-  });
+  
+  // Form validation integration
+  const {
+    values: formData,
+    errors,
+    touched,
+    isValid,
+    handleChange: handleValidatedChange,
+    handleBlur,
+    validateForm
+  } = useFormValidation(
+    {
+      title: '',
+      description: '',
+      category: '',
+      date: '',
+      time: '',
+      duration_minutes: '',
+      venue: '',
+      price: '',
+      early_bird_price: '',
+      early_bird_deadline: '',
+      max_seats: '',
+      requirements_text: '',
+      what_you_learn: ''
+    },
+    seminarValidationRules
+  );
+  
   const [seminarImage, setSeminarImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [imageError, setImageError] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
+  // Updated handleChange function
   const handleChange = (e) => {
-    setFormData(prev => ({
-      ...prev,
-      [e.target.name]: e.target.value
-    }));
+    handleValidatedChange(e.target.name, e.target.value);
   };
 
+  // Enhanced image validation and preview
   const handleImageChange = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      setSeminarImage(file);
+    setImageError('');
+    
+    if (!file) {
+      setSeminarImage(null);
+      setImagePreview(null);
+      return;
     }
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setImageError('Please select a valid image file (JPEG, PNG, or WebP)');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+    if (file.size > maxSize) {
+      setImageError('Image size should be less than 5MB');
+      return;
+    }
+
+    // Validate image dimensions
+    const img = new Image();
+    img.onload = function() {
+      const minWidth = 400;
+      const minHeight = 300;
+      
+      if (this.width < minWidth || this.height < minHeight) {
+        setImageError(`Image should be at least ${minWidth}x${minHeight} pixels`);
+        setSeminarImage(null);
+        setImagePreview(null);
+        return;
+      }
+
+      // If all validations pass, set the image
+      setSeminarImage(file);
+      
+      // Create preview
+      const reader = new FileReader();
+      reader.onload = (e) => setImagePreview(e.target.result);
+      reader.readAsDataURL(file);
+    };
+    
+    img.onerror = function() {
+      setImageError('Invalid image file');
+      setSeminarImage(null);
+      setImagePreview(null);
+    };
+    
+    img.src = URL.createObjectURL(file);
+  };
+
+  // Remove image
+  const removeImage = () => {
+    setSeminarImage(null);
+    setImagePreview(null);
+    setImageError('');
+    // Reset file input
+    const fileInput = document.getElementById('seminar_image');
+    if (fileInput) fileInput.value = '';
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Final validation check
+    if (!validateForm()) {
+      setMessage('Please fix all errors before submitting');
+      return;
+    }
+    
     setLoading(true);
     setMessage('');
+    setUploadProgress(0);
 
     try {
       const submitData = new FormData();
@@ -807,6 +1012,10 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
       const response = await api.post('/coach/create-seminar', submitData, {
         headers: {
           'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(progress);
         }
       });
 
@@ -822,15 +1031,35 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
       setMessage(error.response?.data?.message || 'Failed to create seminar');
     } finally {
       setLoading(false);
+      setUploadProgress(0);
     }
   };
+
+  // Form completion percentage
+  const requiredFields = ['title', 'description', 'category', 'date', 'time', 'duration_minutes', 'venue', 'price', 'max_seats'];
+  const filledRequiredFields = requiredFields.filter(field => formData[field]).length;
+  const completionPercentage = Math.round((filledRequiredFields / requiredFields.length) * 100);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         <div className="p-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Create New Seminar</h2>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Create New Seminar</h2>
+              {/* Form completion progress */}
+              <div className="mt-2">
+                <div className="text-sm text-gray-600 mb-1">
+                  Form completion: {completionPercentage}%
+                </div>
+                <div className="w-64 bg-gray-200 rounded-full h-2">
+                  <div 
+                    className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${completionPercentage}%` }}
+                  ></div>
+                </div>
+              </div>
+            </div>
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600"
@@ -848,69 +1077,183 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                 <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
                   Seminar Title *
                 </label>
-                <input
-                  type="text"
-                  id="title"
-                  name="title"
-                  value={formData.title}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                  placeholder="Enter an engaging title for your seminar"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="title"
+                    name="title"
+                    value={formData.title}
+                    onChange={handleChange}
+                    onBlur={() => handleBlur('title')}
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                      touched.title && errors.title 
+                        ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                        : touched.title && !errors.title && formData.title
+                          ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                          : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                    }`}
+                    placeholder="Enter an engaging title for your seminar"
+                    required
+                  />
+                  {/* Validation icon */}
+                  {touched.title && (
+                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                      {errors.title ? (
+                        <AlertCircle className="h-5 w-5 text-red-500" />
+                      ) : formData.title ? (
+                        <CheckCircle className="h-5 w-5 text-green-500" />
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+                {touched.title && errors.title && (
+                  <p className="mt-1 text-sm text-red-600 flex items-center">
+                    <AlertCircle className="h-4 w-4 mr-1" />
+                    {errors.title}
+                  </p>
+                )}
               </div>
 
               <div>
                 <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
                   Description *
+                  {formData.description && (
+                    <span className="text-gray-500 text-xs ml-2">
+                      ({formData.description.length}/1000)
+                    </span>
+                  )}
                 </label>
                 <textarea
                   id="description"
                   name="description"
                   value={formData.description}
                   onChange={handleChange}
+                  onBlur={() => handleBlur('description')}
                   rows={4}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                  maxLength={1000}
+                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                    touched.description && errors.description 
+                      ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                      : touched.description && !errors.description && formData.description
+                        ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                        : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                  }`}
                   placeholder="Describe what your seminar is about, who it's for, and what students will gain"
                   required
                 />
+                {touched.description && errors.description && (
+                  <p className="mt-1 text-sm text-red-600 flex items-center">
+                    <AlertCircle className="h-4 w-4 mr-1" />
+                    {errors.description}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="category" className="block text-sm font-medium text-gray-700 mb-1">
-                    Category
+                    Category *
                   </label>
-                  <select
-                    id="category"
-                    name="category"
-                    value={formData.category}
-                    onChange={handleChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                  >
-                    <option value="">Select a category</option>
-                    <option value="Web Development">Web Development</option>
-                    <option value="Data Science">Data Science</option>
-                    <option value="Digital Marketing">Digital Marketing</option>
-                    <option value="Design">Design</option>
-                    <option value="Finance">Finance</option>
-                    <option value="Personal Development">Personal Development</option>
-                    <option value="Business">Business</option>
-                    <option value="Technology">Technology</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      id="category"
+                      name="category"
+                      value={formData.category}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('category')}
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                        touched.category && errors.category 
+                          ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                          : touched.category && !errors.category && formData.category
+                            ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                            : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                      }`}
+                      required
+                    >
+                      <option value="">Select a category</option>
+                      <option value="Web Development">Web Development</option>
+                      <option value="Data Science">Data Science</option>
+                      <option value="Digital Marketing">Digital Marketing</option>
+                      <option value="Design">Design</option>
+                      <option value="Finance">Finance</option>
+                      <option value="Personal Development">Personal Development</option>
+                      <option value="Business">Business</option>
+                      <option value="Technology">Technology</option>
+                    </select>
+                    {touched.category && (
+                      <div className="absolute inset-y-0 right-8 pr-3 flex items-center pointer-events-none">
+                        {errors.category ? (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        ) : formData.category ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  {touched.category && errors.category && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.category}
+                    </p>
+                  )}
                 </div>
 
+                {/* Enhanced Image Upload Section */}
                 <div>
-                  <label htmlFor="seminar_image" className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
                     Seminar Image
                   </label>
-                  <input
-                    type="file"
-                    id="seminar_image"
-                    onChange={handleImageChange}
-                    accept="image/*"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                  />
+                  
+                  {!imagePreview ? (
+                    <div className="relative">
+                      <input
+                        type="file"
+                        id="seminar_image"
+                        onChange={handleImageChange}
+                        accept="image/*"
+                        className="hidden"
+                      />
+                      <label
+                        htmlFor="seminar_image"
+                        className="w-full h-32 border-2 border-dashed border-gray-300 rounded-md flex flex-col items-center justify-center cursor-pointer hover:border-green-400 hover:bg-green-50 transition-colors"
+                      >
+                        <Upload className="h-8 w-8 text-gray-400 mb-2" />
+                        <span className="text-sm text-gray-600">Click to upload image</span>
+                        <span className="text-xs text-gray-500 mt-1">JPG, PNG or WebP (max 5MB)</span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <div className="w-full h-32 border border-gray-300 rounded-md overflow-hidden">
+                        <img
+                          src={imagePreview}
+                          alt="Preview"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={removeImage}
+                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                      <div className="mt-2 text-xs text-gray-600">
+                        {seminarImage?.name} ({(seminarImage?.size / (1024 * 1024)).toFixed(2)} MB)
+                      </div>
+                    </div>
+                  )}
+
+                  {imageError && (
+                    <div className="mt-2 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {imageError}
+                    </div>
+                  )}
+                  
+                  <div className="mt-2 text-xs text-gray-500">
+                    Recommended: 800x600px or larger for best quality
+                  </div>
                 </div>
               </div>
             </div>
@@ -924,49 +1267,121 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                   <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-1">
                     Date *
                   </label>
-                  <input
-                    type="date"
-                    id="date"
-                    name="date"
-                    value={formData.date}
-                    onChange={handleChange}
-                    min={new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="date"
+                      id="date"
+                      name="date"
+                      value={formData.date}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('date')}
+                      min={new Date().toISOString().split('T')[0]}
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                        touched.date && errors.date 
+                          ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                          : touched.date && !errors.date && formData.date
+                            ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                            : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                      }`}
+                      required
+                    />
+                    {touched.date && (
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                        {errors.date ? (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        ) : formData.date ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  {touched.date && errors.date && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.date}
+                    </p>
+                  )}
                 </div>
 
                 <div>
                   <label htmlFor="time" className="block text-sm font-medium text-gray-700 mb-1">
                     Time *
                   </label>
-                  <input
-                    type="time"
-                    id="time"
-                    name="time"
-                    value={formData.time}
-                    onChange={handleChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="time"
+                      id="time"
+                      name="time"
+                      value={formData.time}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('time')}
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                        touched.time && errors.time 
+                          ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                          : touched.time && !errors.time && formData.time
+                            ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                            : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                      }`}
+                      required
+                    />
+                    {touched.time && (
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                        {errors.time ? (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        ) : formData.time ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  {touched.time && errors.time && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.time}
+                    </p>
+                  )}
                 </div>
 
                 <div>
                   <label htmlFor="duration_minutes" className="block text-sm font-medium text-gray-700 mb-1">
                     Duration (minutes) *
                   </label>
-                  <input
-                    type="number"
-                    id="duration_minutes"
-                    name="duration_minutes"
-                    value={formData.duration_minutes}
-                    onChange={handleChange}
-                    min="30"
-                    max="480"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="e.g., 120"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="number"
+                      id="duration_minutes"
+                      name="duration_minutes"
+                      value={formData.duration_minutes}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('duration_minutes')}
+                      min="30"
+                      max="480"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                        touched.duration_minutes && errors.duration_minutes 
+                          ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                          : touched.duration_minutes && !errors.duration_minutes && formData.duration_minutes
+                            ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                            : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                      }`}
+                      placeholder="e.g., 120"
+                      required
+                    />
+                    {touched.duration_minutes && (
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                        {errors.duration_minutes ? (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        ) : formData.duration_minutes ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  {touched.duration_minutes && errors.duration_minutes && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.duration_minutes}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -974,61 +1389,132 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                 <label htmlFor="venue" className="block text-sm font-medium text-gray-700 mb-1">
                   Venue *
                 </label>
-                <input
-                  type="text"
-                  id="venue"
-                  name="venue"
-                  value={formData.venue}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                  placeholder="e.g., Online (Zoom), Conference Hall, IT Park Chandigarh"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="venue"
+                    name="venue"
+                    value={formData.venue}
+                    onChange={handleChange}
+                    onBlur={() => handleBlur('venue')}
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                      touched.venue && errors.venue 
+                        ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                        : touched.venue && !errors.venue && formData.venue
+                          ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                          : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                    }`}
+                    placeholder="e.g., Conference Room A, Building 123 or Online via Zoom"
+                    required
+                  />
+                  {touched.venue && (
+                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                      {errors.venue ? (
+                        <AlertCircle className="h-5 w-5 text-red-500" />
+                      ) : formData.venue ? (
+                        <CheckCircle className="h-5 w-5 text-green-500" />
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+                {touched.venue && errors.venue && (
+                  <p className="mt-1 text-sm text-red-600 flex items-center">
+                    <AlertCircle className="h-4 w-4 mr-1" />
+                    {errors.venue}
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* Pricing & Capacity */}
+            {/* Pricing */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-gray-900">Pricing & Capacity</h3>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="price" className="block text-sm font-medium text-gray-700 mb-1">
-                    Price (₹) *
+                    Regular Price (₹) *
                   </label>
-                  <input
-                    type="number"
-                    id="price"
-                    name="price"
-                    value={formData.price}
-                    onChange={handleChange}
-                    min="0"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="Regular price"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="number"
+                      id="price"
+                      name="price"
+                      value={formData.price}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('price')}
+                      min="0"
+                      step="1"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                        touched.price && errors.price 
+                          ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                          : touched.price && !errors.price && formData.price
+                            ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                            : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                      }`}
+                      placeholder="e.g., 1500"
+                      required
+                    />
+                    {touched.price && (
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                        {errors.price ? (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        ) : formData.price ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  {touched.price && errors.price && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.price}
+                    </p>
+                  )}
                 </div>
 
                 <div>
                   <label htmlFor="max_seats" className="block text-sm font-medium text-gray-700 mb-1">
                     Maximum Seats *
                   </label>
-                  <input
-                    type="number"
-                    id="max_seats"
-                    name="max_seats"
-                    value={formData.max_seats}
-                    onChange={handleChange}
-                    min="1"
-                    max="1000"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="e.g., 50"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="number"
+                      id="max_seats"
+                      name="max_seats"
+                      value={formData.max_seats}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('max_seats')}
+                      min="1"
+                      max="1000"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 pr-10 ${
+                        touched.max_seats && errors.max_seats 
+                          ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
+                          : touched.max_seats && !errors.max_seats && formData.max_seats
+                            ? 'border-green-300 focus:ring-green-500 focus:border-green-500'
+                            : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                      }`}
+                      placeholder="e.g., 50"
+                      required
+                    />
+                    {touched.max_seats && (
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                        {errors.max_seats ? (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        ) : formData.max_seats ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                  {touched.max_seats && errors.max_seats && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.max_seats}
+                    </p>
+                  )}
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="early_bird_price" className="block text-sm font-medium text-gray-700 mb-1">
                     Early Bird Price (₹)
@@ -1039,10 +1525,18 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                     name="early_bird_price"
                     value={formData.early_bird_price}
                     onChange={handleChange}
+                    onBlur={() => handleBlur('early_bird_price')}
                     min="0"
+                    step="1"
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="Discounted price"
+                    placeholder="e.g., 1200"
                   />
+                  {touched.early_bird_price && errors.early_bird_price && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.early_bird_price}
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -1055,16 +1549,24 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                     name="early_bird_deadline"
                     value={formData.early_bird_deadline}
                     onChange={handleChange}
+                    onBlur={() => handleBlur('early_bird_deadline')}
                     min={new Date().toISOString().split('T')[0]}
+                    max={formData.date}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
+                  {touched.early_bird_deadline && errors.early_bird_deadline && (
+                    <p className="mt-1 text-sm text-red-600 flex items-center">
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      {errors.early_bird_deadline}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Content Details */}
+            {/* Additional Details */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-gray-900">Content Details</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Additional Details</h3>
               
               <div>
                 <label htmlFor="what_you_learn" className="block text-sm font-medium text-gray-700 mb-1">
@@ -1075,9 +1577,10 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                   name="what_you_learn"
                   value={formData.what_you_learn}
                   onChange={handleChange}
+                  onBlur={() => handleBlur('what_you_learn')}
                   rows={4}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                  placeholder="List the key learning outcomes (one per line)&#10;e.g.:&#10;Build dynamic web applications&#10;Master React hooks and state management&#10;Deploy applications to production"
+                  placeholder="List key learning outcomes (one per line)&#10;e.g.:&#10;Build dynamic web applications&#10;Master React hooks and state management&#10;Deploy applications to production"
                 />
               </div>
 
@@ -1090,12 +1593,29 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
                   name="requirements_text"
                   value={formData.requirements_text}
                   onChange={handleChange}
+                  onBlur={() => handleBlur('requirements_text')}
                   rows={3}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
                   placeholder="List any prerequisites or requirements (one per line)&#10;e.g.:&#10;Basic HTML and CSS knowledge&#10;Laptop with code editor installed&#10;Willingness to learn"
                 />
               </div>
             </div>
+
+            {/* Upload Progress */}
+            {loading && uploadProgress > 0 && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Uploading...</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div 
+                    className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
 
             {/* Message */}
             {message && (
@@ -1120,19 +1640,24 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                disabled={loading}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={loading}
-                className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center"
+                disabled={loading || imageError || !isValid}
+                className={`px-6 py-2 rounded-md font-medium transition-colors flex items-center ${
+                  loading || imageError || !isValid
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-green-600 text-white hover:bg-green-700'
+                }`}
               >
                 {loading ? (
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Creating...
+                    {uploadProgress > 0 ? `Uploading... ${uploadProgress}%` : 'Creating...'}
                   </>
                 ) : (
                   <>
@@ -1148,5 +1673,6 @@ const CreateSeminarModal = ({ onClose, onSuccess }) => {
     </div>
   );
 };
+
 
 export default CoachDashboard;

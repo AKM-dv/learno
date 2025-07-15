@@ -1,4 +1,4 @@
-// src/pages/public/SeminarDetail.js
+// src/pages/public/SeminarDetail.js - Enhanced Payment Integration
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
@@ -12,7 +12,9 @@ import {
   User,
   CheckCircle,
   AlertCircle,
-  ArrowLeft
+  ArrowLeft,
+  CreditCard,
+  Shield
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
@@ -26,8 +28,10 @@ const SeminarDetail = () => {
   const [reviews, setReviews] = useState([]);
   const [reviewStats, setReviewStats] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [bookingLoading, setBookingLoading] = useState(false);
-  const [showAllReviews, setShowAllReviews] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
+  const [isRegistered, setIsRegistered] = useState(false);
 
   // Fetch seminar details
   const fetchSeminarDetails = async () => {
@@ -37,6 +41,11 @@ const SeminarDetail = () => {
       
       if (response.data.success) {
         setSeminar(response.data.data);
+        
+        // Check if user is already registered
+        if (isAuthenticated && user?.user_type === 'user') {
+          checkRegistrationStatus();
+        }
       } else {
         navigate('/seminars');
       }
@@ -45,6 +54,22 @@ const SeminarDetail = () => {
       navigate('/seminars');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Check if user is already registered
+  const checkRegistrationStatus = async () => {
+    try {
+      const response = await api.get('/user/seminars');
+      if (response.data.success) {
+        const userSeminars = response.data.data;
+        const isAlreadyRegistered = userSeminars.some(
+          (userSeminar) => userSeminar.id === parseInt(id)
+        );
+        setIsRegistered(isAlreadyRegistered);
+      }
+    } catch (error) {
+      console.error('Failed to check registration status:', error);
     }
   };
 
@@ -67,7 +92,7 @@ const SeminarDetail = () => {
       fetchSeminarDetails();
       fetchReviews();
     }
-  }, [id]);
+  }, [id, isAuthenticated]);
 
   // Helper functions
   const formatPrice = (price, earlyBirdPrice, earlyBirdDeadline) => {
@@ -110,18 +135,35 @@ const SeminarDetail = () => {
     });
   };
 
-  const handleBookNow = async () => {
+  // Payment handling
+  const handleRegisterClick = () => {
     if (!isAuthenticated) {
       navigate('/student/login');
       return;
     }
 
     if (user?.user_type !== 'user') {
-      alert('Only students can book seminars');
+      setPaymentError('Only students can register for seminars');
       return;
     }
 
-    setBookingLoading(true);
+    if (isRegistered) {
+      setPaymentError('You are already registered for this seminar');
+      return;
+    }
+
+    if (seminar.seats_available <= 0) {
+      setPaymentError('This seminar is fully booked');
+      return;
+    }
+
+    setShowPaymentModal(true);
+    setPaymentError('');
+  };
+
+  const processPayment = async () => {
+    setPaymentLoading(true);
+    setPaymentError('');
     
     try {
       // Create payment order
@@ -135,7 +177,7 @@ const SeminarDetail = () => {
         // Initialize Razorpay
         const options = {
           key: key_id,
-          amount: amount * 100,
+          amount: amount * 100, // Convert to paise
           currency: "INR",
           name: "Learno",
           description: seminar.title,
@@ -146,40 +188,73 @@ const SeminarDetail = () => {
               const verifyResponse = await api.post('/payment/verify', {
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature
+                razorpay_signature: response.razorpay_signature,
+                seminar_id: seminar.id
               });
 
               if (verifyResponse.data.success) {
-                alert('Booking successful! Welcome to the seminar.');
-                navigate('/dashboard');
+                setShowPaymentModal(false);
+                setIsRegistered(true);
+                // Update seats available
+                setSeminar(prev => ({
+                  ...prev,
+                  seats_available: prev.seats_available - 1
+                }));
+                
+                // Show success message
+                alert('🎉 Registration successful! Welcome to the seminar.');
+                
+                // Redirect to dashboard after a delay
+                setTimeout(() => {
+                  navigate('/dashboard');
+                }, 2000);
               } else {
-                alert('Payment verification failed. Please contact support.');
+                setPaymentError('Payment verification failed. Please contact support.');
               }
             } catch (error) {
-              alert('Payment verification failed. Please contact support.');
+              setPaymentError('Payment verification failed. Please contact support.');
             }
           },
           prefill: {
             name: user?.name,
-            email: user?.email
+            email: user?.email,
+            contact: user?.contact_number || ''
+          },
+          notes: {
+            seminar_id: seminar.id,
+            user_id: user?.id
           },
           theme: {
             color: "#2563eb"
+          },
+          modal: {
+            ondismiss: function() {
+              setPaymentLoading(false);
+              setShowPaymentModal(false);
+            }
           }
         };
 
         const rzp = new window.Razorpay(options);
+        
+        rzp.on('payment.failed', function (response) {
+          setPaymentError(`Payment failed: ${response.error.description}`);
+          setPaymentLoading(false);
+        });
+        
         rzp.open();
+      } else {
+        setPaymentError(response.data.message || 'Failed to create payment order');
       }
     } catch (error) {
-      console.error('Booking failed:', error);
+      console.error('Payment failed:', error);
       if (error.response?.data?.message) {
-        alert(error.response.data.message);
+        setPaymentError(error.response.data.message);
       } else {
-        alert('Booking failed. Please try again.');
+        setPaymentError('Payment failed. Please try again.');
       }
     } finally {
-      setBookingLoading(false);
+      setPaymentLoading(false);
     }
   };
 
@@ -195,12 +270,13 @@ const SeminarDetail = () => {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 mb-4">Seminar not found</h2>
+          <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Seminar not found</h2>
           <button
             onClick={() => navigate('/seminars')}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+            className="text-blue-600 hover:text-blue-700"
           >
-            Browse Seminars
+            ← Back to seminars
           </button>
         </div>
       </div>
@@ -211,43 +287,44 @@ const SeminarDetail = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      {/* Back Button */}
       <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <button
-            onClick={() => navigate('/seminars')}
-            className="flex items-center text-gray-600 hover:text-gray-800"
+            onClick={() => navigate(-1)}
+            className="flex items-center text-gray-600 hover:text-gray-900"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Seminars
+            Back
           </button>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Main Content */}
-          <div className="lg:col-span-2">
+          {/* Left Column - Seminar Details */}
+          <div className="lg:col-span-2 space-y-6">
             
-            {/* Seminar Image */}
-            <div className="bg-gradient-to-br from-blue-100 to-indigo-200 rounded-lg h-64 flex items-center justify-center mb-6">
-              {seminar.seminar_image ? (
-                <img
-                  src={`${process.env.REACT_APP_API_URL}/uploads/${seminar.seminar_image}`}
-                  alt={seminar.title}
-                  className="w-full h-full object-cover rounded-lg"
-                />
-              ) : (
-                <BookOpen className="h-24 w-24 text-blue-600" />
-              )}
-            </div>
-
-            {/* Title and Basic Info */}
-            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+            {/* Header */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <div className="flex items-center space-x-3 mb-4">
+                <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-medium">
+                  {seminar.category}
+                </span>
+                {priceInfo.isEarlyBird && (
+                  <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium">
+                    Early Bird Special
+                  </span>
+                )}
+              </div>
+              
               <h1 className="text-3xl font-bold text-gray-900 mb-4">{seminar.title}</h1>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {/* Key Details */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="flex items-center">
                   <Calendar className="h-5 w-5 text-gray-500 mr-3" />
                   <div>
@@ -277,255 +354,191 @@ const SeminarDetail = () => {
                   <div>
                     <p className="text-sm text-gray-500">Seats Available</p>
                     <p className="font-medium">
-                      {seminar.seats_available > 0 ? (
-                        <span className="text-green-600">{seminar.seats_available} left</span>
-                      ) : (
-                        <span className="text-red-600">Fully Booked</span>
-                      )}
+                      {seminar.seats_available > 0 ? 
+                        `${seminar.seats_available} seats left` : 
+                        'Fully Booked'
+                      }
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* Rating */}
-              {seminar.avg_rating > 0 && (
-                <div className="flex items-center mb-4">
-                  <Star className="h-5 w-5 text-yellow-400 mr-2" />
-                  <span className="text-lg font-medium">{seminar.avg_rating}</span>
-                  <span className="text-gray-600 ml-2">({seminar.review_count} reviews)</span>
+              {/* Coach Info */}
+              <div className="flex items-center space-x-3 p-4 bg-gray-50 rounded-lg">
+                <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                  <User className="h-6 w-6 text-blue-600" />
                 </div>
-              )}
+                <div>
+                  <p className="font-medium text-gray-900">{seminar.coach_name}</p>
+                  <p className="text-sm text-gray-600">Instructor</p>
+                </div>
+                {seminar.avg_rating && (
+                  <div className="flex items-center ml-auto">
+                    <Star className="h-4 w-4 text-yellow-400 fill-current mr-1" />
+                    <span className="text-sm font-medium">{seminar.avg_rating}</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Description */}
-            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">About This Seminar</h2>
-              <p className="text-gray-700 leading-relaxed whitespace-pre-line">{seminar.description}</p>
-            </div>
-
-            {/* What You'll Learn */}
-            {seminar.what_you_learn && (
-              <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-                <h2 className="text-xl font-bold text-gray-900 mb-4">What You'll Learn</h2>
-                <div className="space-y-2">
-                  {seminar.what_you_learn.split('\n').map((item, index) => (
-                    <div key={index} className="flex items-start">
-                      <CheckCircle className="h-5 w-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" />
-                      <span className="text-gray-700">{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Requirements */}
-            {seminar.requirements_text && (
-              <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-                <h2 className="text-xl font-bold text-gray-900 mb-4">Requirements</h2>
-                <div className="space-y-2">
-                  {seminar.requirements_text.split('\n').map((item, index) => (
-                    <div key={index} className="flex items-start">
-                      <AlertCircle className="h-5 w-5 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
-                      <span className="text-gray-700">{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Coach Info */}
-            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">About the Coach</h2>
-              <div className="flex items-start space-x-4">
-                <div className="bg-gray-100 rounded-full p-3">
-                  <User className="h-8 w-8 text-gray-600" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-gray-900">{seminar.coach_name}</h3>
-                  {seminar.specialization && (
-                    <p className="text-blue-600 mb-2">{seminar.specialization}</p>
-                  )}
-                  {seminar.experience_years && (
-                    <p className="text-gray-600 mb-2">{seminar.experience_years} years experience</p>
-                  )}
-                  {seminar.bio && (
-                    <p className="text-gray-700">{seminar.bio}</p>
-                  )}
-                </div>
-              </div>
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">About This Seminar</h2>
+              <p className="text-gray-700 leading-relaxed">{seminar.description}</p>
             </div>
 
             {/* Reviews Section */}
             {reviews.length > 0 && (
               <div className="bg-white rounded-lg shadow-sm p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-xl font-bold text-gray-900">Reviews</h2>
-                  {reviewStats && (
-                    <div className="flex items-center space-x-4">
-                      <div className="flex items-center">
-                        <Star className="h-5 w-5 text-yellow-400 mr-1" />
-                        <span className="text-lg font-semibold">{reviewStats.avg_rating}</span>
-                      </div>
-                      <span className="text-gray-600">({reviewStats.total_reviews} reviews)</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Rating Distribution */}
-                {reviewStats && (
-                  <div className="mb-6">
-                    <h3 className="text-sm font-medium text-gray-900 mb-3">Rating Distribution</h3>
-                    {[5, 4, 3, 2, 1].map(rating => {
-                      const count = reviewStats.rating_distribution[rating] || 0;
-                      const percentage = reviewStats.total_reviews > 0 ? (count / reviewStats.total_reviews) * 100 : 0;
-                      
-                      return (
-                        <div key={rating} className="flex items-center mb-2">
-                          <span className="text-sm text-gray-600 w-6">{rating}</span>
-                          <Star className="h-4 w-4 text-yellow-400 mr-2" />
-                          <div className="flex-1 bg-gray-200 rounded-full h-2 mr-3">
-                            <div 
-                              className="bg-yellow-400 h-2 rounded-full" 
-                              style={{ width: `${percentage}%` }}
-                            ></div>
-                          </div>
-                          <span className="text-sm text-gray-600 w-8">{count}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Review List */}
+                <h2 className="text-xl font-semibold text-gray-900 mb-4">Reviews</h2>
                 <div className="space-y-4">
-                  {reviews.slice(0, showAllReviews ? reviews.length : 3).map((review) => (
+                  {reviews.map((review) => (
                     <div key={review.id} className="border-b border-gray-100 pb-4 last:border-b-0">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex items-center">
-                          <div className="bg-gray-100 rounded-full p-2 mr-3">
-                            <User className="h-4 w-4 text-gray-600" />
-                          </div>
-                          <div>
-                            <p className="font-medium text-gray-900">{review.user_name}</p>
-                            <div className="flex items-center">
-                              {[...Array(5)].map((_, i) => (
-                                <Star
-                                  key={i}
-                                  className={`h-4 w-4 ${i < review.rating ? 'text-yellow-400' : 'text-gray-300'}`}
-                                />
-                              ))}
-                            </div>
-                          </div>
+                      <div className="flex items-center space-x-2 mb-2">
+                        <div className="flex">
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <Star
+                              key={star}
+                              className={`h-4 w-4 ${
+                                star <= review.rating ? 'text-yellow-400 fill-current' : 'text-gray-300'
+                              }`}
+                            />
+                          ))}
                         </div>
-                        <span className="text-sm text-gray-500">
-                          {new Date(review.created_at).toLocaleDateString()}
-                        </span>
+                        <span className="text-sm font-medium text-gray-900">{review.user_name}</span>
                       </div>
-                      {review.review_text && (
-                        <p className="text-gray-700 ml-11">{review.review_text}</p>
-                      )}
+                      <p className="text-gray-700 text-sm">{review.review_text}</p>
                     </div>
                   ))}
                 </div>
-
-                {/* Show More Reviews Button */}
-                {reviews.length > 3 && (
-                  <div className="mt-4 text-center">
-                    <button
-                      onClick={() => setShowAllReviews(!showAllReviews)}
-                      className="text-blue-600 hover:text-blue-700 font-medium"
-                    >
-                      {showAllReviews ? 'Show Less' : `Show All ${reviews.length} Reviews`}
-                    </button>
-                  </div>
-                )}
               </div>
             )}
           </div>
 
-          {/* Sidebar - Booking Card */}
+          {/* Right Column - Booking Card */}
           <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg shadow-lg p-6 sticky top-6">
+            <div className="bg-white rounded-lg shadow-sm p-6 sticky top-6">
               
-              {/* Price Section */}
+              {/* Price */}
               <div className="mb-6">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-3xl font-bold text-gray-900">₹{priceInfo.current}</span>
-                  {priceInfo.isEarlyBird && (
-                    <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">
-                      Early Bird
+                <div className="flex items-center space-x-2 mb-2">
+                  <IndianRupee className="h-6 w-6 text-gray-600" />
+                  <span className="text-3xl font-bold text-gray-900">
+                    {priceInfo.current}
+                  </span>
+                  {priceInfo.original && (
+                    <span className="text-lg text-gray-500 line-through">
+                      ₹{priceInfo.original}
                     </span>
                   )}
                 </div>
-                
                 {priceInfo.isEarlyBird && (
-                  <div className="space-y-1">
-                    <p className="text-lg text-gray-500 line-through">₹{priceInfo.original}</p>
-                    <p className="text-green-600 text-sm font-medium">
-                      Save ₹{priceInfo.savings}! Limited time offer
-                    </p>
-                  </div>
+                  <p className="text-green-600 text-sm font-medium">
+                    Save ₹{priceInfo.savings} with Early Bird pricing!
+                  </p>
                 )}
               </div>
 
-              {/* Seminar Status */}
-              <div className="mb-6">
-                {seminar.seats_available > 0 ? (
-                  <div className="flex items-center text-green-600 mb-2">
-                    <CheckCircle className="h-5 w-5 mr-2" />
-                    <span className="font-medium">{seminar.seats_available} seats available</span>
+              {/* Registration Status */}
+              {isRegistered ? (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                    <span className="text-green-800 font-medium">Already Registered</span>
                   </div>
-                ) : (
-                  <div className="flex items-center text-red-600 mb-2">
-                    <AlertCircle className="h-5 w-5 mr-2" />
-                    <span className="font-medium">Fully booked</span>
-                  </div>
-                )}
-              </div>
+                  <p className="text-green-700 text-sm mt-1">
+                    You're all set for this seminar!
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Error Message */}
+                  {paymentError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                      <div className="flex items-center space-x-2">
+                        <AlertCircle className="h-5 w-5 text-red-600" />
+                        <span className="text-red-800 text-sm">{paymentError}</span>
+                      </div>
+                    </div>
+                  )}
 
-              {/* Booking Button */}
-              <button
-                onClick={handleBookNow}
-                disabled={bookingLoading || seminar.seats_available <= 0}
-                className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {bookingLoading ? (
-                  <div className="flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                    Processing...
-                  </div>
-                ) : seminar.seats_available <= 0 ? (
-                  'Fully Booked'
-                ) : (
-                  'Book Now'
-                )}
-              </button>
-
-              {!isAuthenticated && (
-                <p className="text-sm text-gray-600 text-center mt-3">
-                  You need to <span className="text-blue-600 font-medium">login</span> to book this seminar
-                </p>
+                  {/* Register Button */}
+                  <button
+                    onClick={handleRegisterClick}
+                    disabled={seminar.seats_available <= 0 || paymentLoading}
+                    className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
+                      seminar.seats_available <= 0 
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    {seminar.seats_available <= 0 ? 'Fully Booked' : 'Register Now'}
+                  </button>
+                </>
               )}
 
-              {/* Quick Info */}
-              <div className="mt-6 space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Duration:</span>
-                  <span className="font-medium">{seminar.duration_minutes} minutes</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Max Students:</span>
-                  <span className="font-medium">{seminar.max_seats}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Category:</span>
-                  <span className="font-medium">{seminar.category || 'General'}</span>
+              {/* Security Note */}
+              <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <Shield className="h-4 w-4" />
+                  <span>Secure payment powered by Razorpay</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Payment Confirmation Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Confirm Payment</h3>
+            
+            <div className="space-y-3 mb-6">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Seminar:</span>
+                <span className="font-medium">{seminar.title}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Amount:</span>
+                <span className="font-medium">₹{priceInfo.current}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Date:</span>
+                <span className="font-medium">{formatDate(seminar.date)}</span>
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                disabled={paymentLoading}
+                className="flex-1 py-2 px-4 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={processPayment}
+                disabled={paymentLoading}
+                className="flex-1 py-2 px-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center space-x-2"
+              >
+                {paymentLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <CreditCard className="h-4 w-4" />
+                    <span>Proceed to Pay</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
